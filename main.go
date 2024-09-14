@@ -63,17 +63,6 @@ func main() {
 		log.Print("Succeeded!")
 		log.Printf("privkey is: %v", priv)
 		log.Printf("pubkey is: %v", pub)
-	case "generate-ecdsa-bypassing-crypto11":
-		log.Print("Testing ECDSA generation key on HSM")
-		log.Print("***********************************")
-		priv, pub, err := testGenerateEcdsaBypassingCrypto11(ctx, conf, []byte(os.Args[5]))
-		if err != nil {
-			log.Printf("failed to generate ecdsa: %v", err)
-			break
-		}
-		log.Print("Succeeded!")
-		log.Printf("privkey is: %v", priv)
-		log.Printf("pubkey is: %v", pub)
 	case "rand-reader":
 		data, err := testRandReader(ctx)
 		if err != nil {
@@ -105,33 +94,6 @@ func testGenerateEcdsa(ctx *pkcs11.Ctx, keyName []byte) (*crypto11.PKCS11Private
 	if len(slots) < 1 {
 		return nil, nil, fmt.Errorf("no usable slots")
 	}
-	// welp, the google library doesn't seem to like what crypto11 does
-	// we end up with:
-	// I20240912 16:09:41.182875 132216886245184 logging.cc:185] returning 0xd1 from C_GenerateKeyPair due to status INVALID_ARGUMENT: at session.cc:535: this token does not accept public key attributes [type.googleapis.com/kmsp11.StatusDetails='CK_RV=0xd1']
-	// https://github.com/GoogleCloudPlatform/kms-integrations/issues/1 seems to
-	// be reporting the same thing
-	// google recommends https://github.com/sethvargo/go-gcpkms in that issue
-	priv, err := crypto11.GenerateECDSAKeyPairOnSlot(slots[0], keyName, keyName, elliptic.P384())
-	if err != nil {
-		return nil, nil, err
-	}
-	// slightly different than autograph code because `priv` is not bound as a generic
-	// crypto.PrivateKey here; it's already a PKCS11PrivateKeyECDSA
-	pub := priv.PubKey.(ecdsa.PublicKey)
-	return priv, &pub, nil
-}
-
-func testGenerateEcdsaBypassingCrypto11(ctx *pkcs11.Ctx, conf crypto11.PKCS11Config, keyName []byte) (*crypto11.PKCS11PrivateKeyECDSA, *ecdsa.PublicKey, error) {
-	// basically just https://github.com/mozilla-services/autograph/blob/657f45ca42b7b392378485dd4c731d02037c0c75/signer/signer.go#L422-L438
-	var slots []uint
-	slots, err := ctx.GetSlotList(true)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(slots) < 1 {
-		return nil, nil, fmt.Errorf("no usable slots")
-	}
-
 	publicKeyTemplate := []*pkcs11.Attribute{}
 	privateKeyTemplate := []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_LABEL, keyName),
@@ -139,14 +101,14 @@ func testGenerateEcdsaBypassingCrypto11(ctx *pkcs11.Ctx, conf crypto11.PKCS11Con
 		// and https://github.com/GoogleCloudPlatform/kms-integrations/blob/4498bffda1e3bfe8750c56ff6f8c0da700152052/kmsp11/kmsp11.h#L33
 		pkcs11.NewAttribute(0x80000000|0x1E100|0x01, 12),
 	}
-	priv, err := crypto11.GenerateECDSAKeyPairOnSlotWithSpecificAttributes(slots[0], keyName, keyName, elliptic.P384(), publicKeyTemplate, privateKeyTemplate)
+	priv, err := crypto11.GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slots[0], keyName, keyName, elliptic.P384(), publicKeyTemplate, privateKeyTemplate)
 	if err != nil {
 		return nil, nil, err
 	}
 	// slightly different than autograph code because `priv` is not bound as a generic
 	// crypto.PrivateKey here; it's already a PKCS11PrivateKeyECDSA
-	pub := priv.PubKey.(ecdsa.PublicKey)
-	return priv, &pub, nil
+	pub := priv.PubKey.(*ecdsa.PublicKey)
+	return priv, pub, nil
 }
 
 func testRandReader(ctx *pkcs11.Ctx) ([]byte, error) {
