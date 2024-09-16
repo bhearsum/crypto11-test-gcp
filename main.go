@@ -26,14 +26,23 @@ func main() {
 	case "generate-ecdsa":
 		log.Print("Testing ECDSA generation key on HSM")
 		log.Print("***********************************")
-		err := testGenerateEcdsa(ctx, []byte(os.Args[5]))
+		key, err := testGenerateKey(ctx, os.Args[3], os.Args[4], kmspb.CryptoKeyVersion_EC_SIGN_P256_SHA256)
 		if err != nil {
 			log.Printf("failed to generate ecdsa: %v", err)
 			break
 		}
 		log.Print("Succeeded!")
-		// log.Printf("privkey is: %v", priv)
-		// log.Printf("pubkey is: %v", pub)
+		log.Printf("key is: %v", key)
+	case "generate-rsa":
+		log.Print("Testing RSA generation key on HSM")
+		log.Print("***********************************")
+		key, err := testGenerateKey(ctx, os.Args[3], os.Args[4], kmspb.CryptoKeyVersion_RSA_SIGN_PKCS1_2048_SHA256)
+		if err != nil {
+			log.Printf("failed to generate ecdsa: %v", err)
+			break
+		}
+		log.Print("Succeeded!")
+		log.Printf("key is: %v", key)
 	case "rand-reader":
 		data, err := testRandReader(ctx, location)
 		if err != nil {
@@ -55,8 +64,30 @@ func main() {
 	}
 }
 
-func testGenerateEcdsa(ctx context.Context, keyName []byte) (error) {
-	return nil
+func testGenerateKey(ctx context.Context, keyRing string, keyName string, algo kmspb.CryptoKeyVersion_CryptoKeyVersionAlgorithm) (*kmspb.CryptoKey, error) {
+	client, err := kms.NewKeyManagementClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	req := kmspb.CreateCryptoKeyRequest{
+		Parent: keyRing,
+		CryptoKeyId: keyName,
+		CryptoKey: &kmspb.CryptoKey{
+			Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN,
+			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				Algorithm: algo,
+			},
+		},
+	}
+
+	resp, err := client.CreateCryptoKey(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 func testRandReader(ctx context.Context, location string) ([]byte, error) {
