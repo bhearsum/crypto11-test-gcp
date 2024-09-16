@@ -80,7 +80,7 @@ func testGenerateKey(ctx context.Context, keyRing string, keyName string, algo k
 	defer client.Close()
 
 	req := kmspb.CreateCryptoKeyRequest{
-		Parent: keyRing,
+		Parent:      keyRing,
 		CryptoKeyId: keyName,
 		CryptoKey: &kmspb.CryptoKey{
 			Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN,
@@ -107,8 +107,8 @@ func testRandReader(ctx context.Context, location string) ([]byte, error) {
 
 	req := &kmspb.GenerateRandomBytesRequest{
 		// notably, this isn't tied to a specific key ring and/or token, just a location
-		Location: location,
-		LengthBytes: 1024,
+		Location:        location,
+		LengthBytes:     1024,
 		ProtectionLevel: kmspb.ProtectionLevel_HSM,
 	}
 	resp, err := client.GenerateRandomBytes(ctx, req)
