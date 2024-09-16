@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
 	"log"
 	"os"
 
@@ -15,8 +14,13 @@ func main() {
 	// things we need to test:
 	// - generating ecdsa key pair
 	// - generating rsa key pair
-	// - finding existing key pair
 	// - generating random bytes
+	// - finding existing key pair
+	//   - this isn't relevant in the end, as the thing autograph wants to do with this is have
+	//   - a handle on something with a `Sign` method, but that doesn't exist in KMS.
+	//   - instead, we'd have to use something like
+	//     https://pkg.go.dev/cloud.google.com/go/kms/apiv1#KeyManagementClient.AsymmetricSign
+	//     directly with a label, so we should test that instead
 
 	ctx := context.Background()
 	location := os.Args[1]
@@ -53,14 +57,18 @@ func main() {
 		encoded := make([]byte, hex.EncodedLen(len(data)))
 		hex.Encode(encoded, data)
 		log.Printf("random hex encoded data is: %s", encoded)
-	case "find-keypair":
-		handle, err := testFindKeyPair(ctx, []byte(os.Args[5]))
+	case "sign":
+		dataToSign, err := os.ReadFile(os.Args[3])
+		if err != nil {
+			log.Printf("failed to read file to sign: %v", err)
+		}
+		resp, err := testSign(ctx, os.Args[4], dataToSign)
 		if err != nil {
 			log.Printf("failed to find key pair: %v", err)
 			break
 		}
 		log.Print("Succeeded!")
-		log.Printf("handle is: %s", handle)
+		log.Printf("handle is: %s", resp)
 	}
 }
 
@@ -110,6 +118,21 @@ func testRandReader(ctx context.Context, location string) ([]byte, error) {
 	return resp.GetData(), nil
 }
 
-func testFindKeyPair(ctx context.Context, label []byte) (uint, error) {
-	return 0, fmt.Errorf("key is not in the HSM; did you specify the label of something that exists in the keyring?")
+func testSign(ctx context.Context, keyName string, dataToSign []byte) (*kmspb.AsymmetricSignResponse, error) {
+	client, err := kms.NewKeyManagementClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	req := kmspb.AsymmetricSignRequest{
+		Name: keyName,
+		Data: dataToSign,
+	}
+	resp, err := client.AsymmetricSign(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
 }
