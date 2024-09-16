@@ -1,69 +1,41 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
 
 	"cloud.google.com/go/kms/apiv1"
+	"cloud.google.com/go/kms/apiv1/kmspb"
 )
 
 func main() {
 	// things we need to test:
-	// crypto11.GenerateECDSAKeyPairOnSlot
-	// crypto11.PKCS11RandReader
-	// crypto11.FindKeyPair
-	//   - with ECDSA key
-	//   - with RSA key
-	// crypto11.GenerateRSAKeyPairOnSlot
-	//   - I don't think we actually call this when using an HSM?
-	// also look into whether we should set log_directory and other options
-	// logs go to stdout if not log is specified which might be fine?
-	conf := crypto11.PKCS11Config{
-		Path: os.Args[1],
-		// This token label must match up with the `label` set in the kmsp11 config
-		// for a given key.
-		// In Autograph, this means either duplicating this label in k8s + autograph
-		// config, or finding some way for autograph to pull it at runtime.
-		// An alternative would be to only set the infra bits in k8s (as env vars)
-		// and then have autograph generate and write the kmsp11 config at runtime
-		// which would combine the stuff coming from the env with the stuff (like label)
-		// coming from the config
-		// in GCP terms, this token is a "key ring", and we would expect the token label to be something like:
-		// projects/bhearsum-test/locations/northamerica-northeast2/keyRings/bhearsum-crypto11-test
-		TokenLabel: os.Args[2],
-	}
+	// - generating ecdsa key pair
+	// - generating rsa key pair
+	// - finding existing key pair
+	// - generating random bytes
 
-	err := os.Setenv("KMS_PKCS11_CONFIG", os.Args[3])
-	if err != nil {
-		log.Fatal(err)
-	}
+	ctx := context.Background()
+	location := os.Args[1]
 
-	ctx, err := crypto11.Configure(&conf)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if ctx != nil {
-	}
-
-	switch os.Args[4] {
+	switch os.Args[2] {
 	// all of the different things we need to test
 	case "generate-ecdsa":
 		log.Print("Testing ECDSA generation key on HSM")
 		log.Print("***********************************")
-		priv, pub, err := testGenerateEcdsa(ctx, []byte(os.Args[5]))
+		err := testGenerateEcdsa(ctx, []byte(os.Args[5]))
 		if err != nil {
 			log.Printf("failed to generate ecdsa: %v", err)
 			break
 		}
 		log.Print("Succeeded!")
-		log.Printf("privkey is: %v", priv)
-		log.Printf("pubkey is: %v", pub)
+		// log.Printf("privkey is: %v", priv)
+		// log.Printf("pubkey is: %v", pub)
 	case "rand-reader":
-		data, err := testRandReader(ctx)
+		data, err := testRandReader(ctx, location)
 		if err != nil {
 			log.Printf("rand reader test failed: %v", err)
 			break
@@ -83,56 +55,30 @@ func main() {
 	}
 }
 
-func testGenerateEcdsa(ctx *pkcs11.Ctx, keyName []byte) (*crypto11.PKCS11PrivateKeyECDSA, *ecdsa.PublicKey, error) {
-	// basically just https://github.com/mozilla-services/autograph/blob/657f45ca42b7b392378485dd4c731d02037c0c75/signer/signer.go#L422-L438
-	var slots []uint
-	slots, err := ctx.GetSlotList(true)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(slots) < 1 {
-		return nil, nil, fmt.Errorf("no usable slots")
-	}
-	publicKeyTemplate := []*pkcs11.Attribute{}
-	privateKeyTemplate := []*pkcs11.Attribute{
-		pkcs11.NewAttribute(pkcs11.CKA_LABEL, keyName),
-		// not provided by pkcs11 - pulled from https://github.com/GoogleCloudPlatform/kms-integrations/blob/4498bffda1e3bfe8750c56ff6f8c0da700152052/kmsp11/kmsp11.h#L30
-		// and https://github.com/GoogleCloudPlatform/kms-integrations/blob/4498bffda1e3bfe8750c56ff6f8c0da700152052/kmsp11/kmsp11.h#L33
-		pkcs11.NewAttribute(0x80000000|0x1E100|0x01, 12),
-	}
-	priv, err := crypto11.GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slots[0], keyName, keyName, elliptic.P384(), publicKeyTemplate, privateKeyTemplate)
-	if err != nil {
-		return nil, nil, err
-	}
-	// slightly different than autograph code because `priv` is not bound as a generic
-	// crypto.PrivateKey here; it's already a PKCS11PrivateKeyECDSA
-	pub := priv.PubKey.(*ecdsa.PublicKey)
-	return priv, pub, nil
+func testGenerateEcdsa(ctx context.Context, keyName []byte) (error) {
+	return nil
 }
 
-func testRandReader(ctx *pkcs11.Ctx) ([]byte, error) {
-	rand := new(crypto11.PKCS11RandReader)
-	data := make([]byte, 512)
-	read, err := rand.Read(data)
+func testRandReader(ctx context.Context, location string) ([]byte, error) {
+	client, err := kms.NewKeyManagementClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if read != 512 {
-		return nil, fmt.Errorf("failed to read 512 bytes of random data")
+	defer client.Close()
+
+	req := &kmspb.GenerateRandomBytesRequest{
+		// notably, this isn't tied to a specific key ring and/or token, just a location
+		Location: location,
+		LengthBytes: 1024,
+		ProtectionLevel: kmspb.ProtectionLevel_HSM,
 	}
-	return data, nil
+	resp, err := client.GenerateRandomBytes(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetData(), nil
 }
 
-func testFindKeyPair(ctx *pkcs11.Ctx, label []byte) (uint, error) {
-	key, err := crypto11.FindKeyPair(nil, label)
-	if err != nil {
-		return 0, err
-	}
-	switch key2 := key.(type) {
-	case *crypto11.PKCS11PrivateKeyECDSA:
-		return uint(key2.Handle), nil
-	case *crypto11.PKCS11PrivateKeyRSA:
-		return uint(key2.Handle), nil
-	}
+func testFindKeyPair(ctx context.Context, label []byte) (uint, error) {
 	return 0, fmt.Errorf("key is not in the HSM; did you specify the label of something that exists in the keyring?")
 }
