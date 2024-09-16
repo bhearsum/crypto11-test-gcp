@@ -8,8 +8,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/ThalesIgnite/crypto11"
-	"github.com/miekg/pkcs11"
+	"cloud.google.com/go/kms/apiv1"
 )
 
 func main() {
