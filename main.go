@@ -85,6 +85,7 @@ func testGenerateKey(ctx context.Context, keyRing string, keyName string, algo k
 		CryptoKey: &kmspb.CryptoKey{
 			Purpose: kmspb.CryptoKey_ASYMMETRIC_SIGN,
 			VersionTemplate: &kmspb.CryptoKeyVersionTemplate{
+				ProtectionLevel: kmspb.ProtectionLevel_HSM,
 				Algorithm: algo,
 			},
 		},
