@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto/rsa"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -11,6 +11,11 @@ import (
 	"github.com/ThalesIgnite/crypto11"
 	"github.com/miekg/pkcs11"
 )
+
+// from https://github.com/GoogleCloudPlatform/kms-integrations/blob/4498bffda1e3bfe8750c56ff6f8c0da700152052/kmsp11/kmsp11.h#L33
+const KMS_ALGORITHM_EC_SIGN_P256_SHA256 = 12
+// from https://github.com/GoogleCloudPlatform/kms-integrations/blob/4498bffda1e3bfe8750c56ff6f8c0da700152052/kmsp11/kmsp11.h#L46
+const KMS_ALGORITHM_RSA_SIGN_PKCS1_2048_SHA256 = 5
 
 func main() {
 	// things we need to test:
@@ -63,6 +68,17 @@ func main() {
 		log.Print("Succeeded!")
 		log.Printf("privkey is: %v", priv)
 		log.Printf("pubkey is: %v", pub)
+	case "generate-rsa":
+		log.Print("Testing RSA generation key on HSM")
+		log.Print("***********************************")
+		priv, pub, err := testGenerateRsa(ctx, []byte(os.Args[5]))
+		if err != nil {
+			log.Printf("failed to generate rsa: %v", err)
+			break
+		}
+		log.Print("Succeeded!")
+		log.Printf("privkey is: %v", priv)
+		log.Printf("pubkey is: %v", pub)
 	case "rand-reader":
 		data, err := testRandReader(ctx)
 		if err != nil {
@@ -97,17 +113,40 @@ func testGenerateEcdsa(ctx *pkcs11.Ctx, keyName []byte) (*crypto11.PKCS11Private
 	publicKeyTemplate := []*pkcs11.Attribute{}
 	privateKeyTemplate := []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_LABEL, keyName),
-		// not provided by pkcs11 - pulled from https://github.com/GoogleCloudPlatform/kms-integrations/blob/4498bffda1e3bfe8750c56ff6f8c0da700152052/kmsp11/kmsp11.h#L30
-		// and https://github.com/GoogleCloudPlatform/kms-integrations/blob/4498bffda1e3bfe8750c56ff6f8c0da700152052/kmsp11/kmsp11.h#L33
-		pkcs11.NewAttribute(0x80000000|0x1E100|0x01, 12),
+		pkcs11.NewAttribute(0x80000000|0x1E100|0x01, KMS_ALGORITHM_EC_SIGN_P256_SHA256),
 	}
-	priv, err := crypto11.GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slots[0], keyName, keyName, elliptic.P384(), publicKeyTemplate, privateKeyTemplate)
+	priv, err := crypto11.GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slots[0], publicKeyTemplate, privateKeyTemplate)
 	if err != nil {
 		return nil, nil, err
 	}
 	// slightly different than autograph code because `priv` is not bound as a generic
 	// crypto.PrivateKey here; it's already a PKCS11PrivateKeyECDSA
 	pub := priv.PubKey.(*ecdsa.PublicKey)
+	return priv, pub, nil
+}
+
+func testGenerateRsa(ctx *pkcs11.Ctx, keyName []byte) (*crypto11.PKCS11PrivateKeyRSA, *rsa.PublicKey, error) {
+	// basically just https://github.com/mozilla-services/autograph/blob/657f45ca42b7b392378485dd4c731d02037c0c75/signer/signer.go#L422-L438
+	var slots []uint
+	slots, err := ctx.GetSlotList(true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(slots) < 1 {
+		return nil, nil, fmt.Errorf("no usable slots")
+	}
+	publicKeyTemplate := []*pkcs11.Attribute{}
+	privateKeyTemplate := []*pkcs11.Attribute{
+		pkcs11.NewAttribute(pkcs11.CKA_LABEL, keyName),
+		pkcs11.NewAttribute(0x80000000|0x1E100|0x01, KMS_ALGORITHM_RSA_SIGN_PKCS1_2048_SHA256),
+	}
+	priv, err := crypto11.GenerateRSAKeyPairOnSlotWithProvidedAttributes(slots[0], publicKeyTemplate, privateKeyTemplate)
+	if err != nil {
+		return nil, nil, err
+	}
+	// slightly different than autograph code because `priv` is not bound as a generic
+	// crypto.PrivateKey here; it's already a PKCS11PrivateKeyECDSA
+	pub := priv.PubKey.(*rsa.PublicKey)
 	return priv, pub, nil
 }
 
