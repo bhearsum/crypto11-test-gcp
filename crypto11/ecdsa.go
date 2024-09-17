@@ -151,7 +151,7 @@ func marshalEcParams(c elliptic.Curve) ([]byte, error) {
 func unmarshalEcParams(b []byte) (elliptic.Curve, error) {
 	// See if it's a well-known curve
 	for _, ci := range wellKnownCurves {
-		if bytes.Compare(b, ci.oid) == 0 {
+		if bytes.Equal(b, ci.oid) {
 			if ci.curve != nil {
 				return ci.curve, nil
 			}
@@ -187,7 +187,7 @@ func unmarshalEcPoint(b []byte, c elliptic.Curve) (x *big.Int, y *big.Int, err e
 		return nil, nil, ErrMalformedDER
 	}
 	pointBytes := b[r:]
-	x, y = elliptic.Unmarshal(c, pointBytes)
+	x, y = elliptic.Unmarshal(c, pointBytes) //nolint:all
 	if x == nil || y == nil {
 		err = ErrMalformedPoint
 	}
@@ -225,6 +225,42 @@ func GenerateECDSAKeyPair(c elliptic.Curve) (*PKCS11PrivateKeyECDSA, error) {
 	return GenerateECDSAKeyPairOnSlot(instance.slot, nil, nil, c)
 }
 
+func getDefaultECDSAKeyAttributes(id []byte, label []byte, c elliptic.Curve) ([]*pkcs11.Attribute, []*pkcs11.Attribute, error) {
+	parameters, err := marshalEcParams(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	if label == nil {
+		if label, err = generateKeyLabel(); err != nil {
+			return nil, nil, err
+		}
+	}
+	if id == nil {
+		if id, err = generateKeyLabel(); err != nil {
+			return nil, nil, err
+		}
+	}
+	publicKeyTemplate := []*pkcs11.Attribute{
+		pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
+		pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_ECDSA),
+		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
+		pkcs11.NewAttribute(pkcs11.CKA_VERIFY, true),
+		pkcs11.NewAttribute(pkcs11.CKA_LABEL, label),
+		pkcs11.NewAttribute(pkcs11.CKA_ID, id),
+		pkcs11.NewAttribute(pkcs11.CKA_ECDSA_PARAMS, parameters),
+	}
+	privateKeyTemplate := []*pkcs11.Attribute{
+		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
+		pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
+		pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
+		pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, false),
+		pkcs11.NewAttribute(pkcs11.CKA_LABEL, label),
+		pkcs11.NewAttribute(pkcs11.CKA_ID, id),
+	}
+
+	return publicKeyTemplate, privateKeyTemplate, nil
+}
+
 // GenerateECDSAKeyPairOnSlot creates an ECDSA private key using curve c, on a specified slot.
 //
 // label and/or id can be nil, in which case random values will be generated.
@@ -232,68 +268,11 @@ func GenerateECDSAKeyPair(c elliptic.Curve) (*PKCS11PrivateKeyECDSA, error) {
 // Only a limited set of named elliptic curves are supported. The
 // underlying PKCS#11 implementation may impose further restrictions.
 func GenerateECDSAKeyPairOnSlot(slot uint, id []byte, label []byte, c elliptic.Curve) (*PKCS11PrivateKeyECDSA, error) {
-	parameters, err := marshalEcParams(c)
+	publicKeyTemplate, privateKeyTemplate, err := getDefaultECDSAKeyAttributes(id, label, c)
 	if err != nil {
 		return nil, err
 	}
-	publicAttributes := []*pkcs11.Attribute{
-		pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
-		pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_ECDSA),
-		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
-		pkcs11.NewAttribute(pkcs11.CKA_VERIFY, true),
-		pkcs11.NewAttribute(pkcs11.CKA_LABEL, label),
-		pkcs11.NewAttribute(pkcs11.CKA_ID, id),
-		pkcs11.NewAttribute(pkcs11.CKA_ECDSA_PARAMS, parameters),
-	}
-	privateAttributes := []*pkcs11.Attribute{
-		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
-		pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
-		pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
-		pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, false),
-		pkcs11.NewAttribute(pkcs11.CKA_LABEL, label),
-		pkcs11.NewAttribute(pkcs11.CKA_ID, id),
-	}
-
-	return GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slot, id, label, c, publicAttributes, privateAttributes)
-}
-
-func GenerateECDSAKeyPairOnSession(session *PKCS11Session, slot uint, id []byte, label []byte, c elliptic.Curve) (*PKCS11PrivateKeyECDSA, error) {
-	parameters, err := marshalEcParams(c)
-	if err != nil {
-		return nil, err
-	}
-	publicAttributes := []*pkcs11.Attribute{
-		pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_PUBLIC_KEY),
-		pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, pkcs11.CKK_ECDSA),
-		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
-		pkcs11.NewAttribute(pkcs11.CKA_VERIFY, true),
-		pkcs11.NewAttribute(pkcs11.CKA_LABEL, label),
-		pkcs11.NewAttribute(pkcs11.CKA_ID, id),
-		pkcs11.NewAttribute(pkcs11.CKA_ECDSA_PARAMS, parameters),
-	}
-	privateAttributes := []*pkcs11.Attribute{
-		pkcs11.NewAttribute(pkcs11.CKA_TOKEN, true),
-		pkcs11.NewAttribute(pkcs11.CKA_SIGN, true),
-		pkcs11.NewAttribute(pkcs11.CKA_SENSITIVE, true),
-		pkcs11.NewAttribute(pkcs11.CKA_EXTRACTABLE, false),
-		pkcs11.NewAttribute(pkcs11.CKA_LABEL, label),
-		pkcs11.NewAttribute(pkcs11.CKA_ID, id),
-	}
-
-	return GenerateECDSAKeyPairOnSessionWithProvidedAttributes(session, slot, id, label, c, publicAttributes, privateAttributes)
-}
-
-func GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slot uint, id []byte, label []byte, c elliptic.Curve, publicAttributes []*pkcs11.Attribute, privateAttributes []*pkcs11.Attribute) (*PKCS11PrivateKeyECDSA, error) {
-	var k *PKCS11PrivateKeyECDSA
-	var err error
-	if err = ensureSessions(instance, slot); err != nil {
-		return nil, err
-	}
-	err = withSession(slot, func(session *PKCS11Session) error {
-		k, err = GenerateECDSAKeyPairOnSessionWithProvidedAttributes(session, slot, id, label, c, publicAttributes, privateAttributes)
-		return err
-	})
-	return k, err
+	return GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slot, publicKeyTemplate, privateKeyTemplate)
 }
 
 // GenerateECDSAKeyPairOnSession creates an ECDSA private key using curve c, using a specified session.
@@ -302,20 +281,36 @@ func GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slot uint, id []byte, labe
 //
 // Only a limited set of named elliptic curves are supported. The
 // underlying PKCS#11 implementation may impose further restrictions.
-func GenerateECDSAKeyPairOnSessionWithProvidedAttributes(session *PKCS11Session, slot uint, id []byte, label []byte, c elliptic.Curve, publicKeyTemplate []*pkcs11.Attribute, privateKeyTemplate []*pkcs11.Attribute) (*PKCS11PrivateKeyECDSA, error) {
+func GenerateECDSAKeyPairOnSession(session *PKCS11Session, slot uint, id []byte, label []byte, c elliptic.Curve) (*PKCS11PrivateKeyECDSA, error) {
+	publicKeyTemplate, privateKeyTemplate, err := getDefaultECDSAKeyAttributes(id, label, c)
+	if err != nil {
+		return nil, err
+	}
+
+	return GenerateECDSAKeyPairOnSessionWithProvidedAttributes(session, slot, publicKeyTemplate, privateKeyTemplate)
+}
+
+// GenerateECDSAKeyPairOnSlotWithProvidedAttributes generates a new ECDSA
+// key pair in the given slot with the given public and private attributes
+func GenerateECDSAKeyPairOnSlotWithProvidedAttributes(slot uint, publicKeyTemplate []*pkcs11.Attribute, privateKeyTemplate []*pkcs11.Attribute) (*PKCS11PrivateKeyECDSA, error) {
+	var k *PKCS11PrivateKeyECDSA
+	var err error
+	if err = ensureSessions(instance, slot); err != nil {
+		return nil, err
+	}
+	err = withSession(slot, func(session *PKCS11Session) error {
+		k, err = GenerateECDSAKeyPairOnSessionWithProvidedAttributes(session, slot, publicKeyTemplate, privateKeyTemplate)
+		return err
+	})
+	return k, err
+}
+
+// GenerateECDSAKeyPairOnSessionWithProvidedAttributes generates a new ECDSA
+// key pair in the given slot with the given public and private attributes
+func GenerateECDSAKeyPairOnSessionWithProvidedAttributes(session *PKCS11Session, slot uint, publicKeyTemplate []*pkcs11.Attribute, privateKeyTemplate []*pkcs11.Attribute) (*PKCS11PrivateKeyECDSA, error) {
 	var err error
 	var pub crypto.PublicKey
 
-	if label == nil {
-		if label, err = generateKeyLabel(); err != nil {
-			return nil, err
-		}
-	}
-	if id == nil {
-		if id, err = generateKeyLabel(); err != nil {
-			return nil, err
-		}
-	}
 	mech := []*pkcs11.Mechanism{pkcs11.NewMechanism(pkcs11.CKM_ECDSA_KEY_PAIR_GEN, nil)}
 	pubHandle, privHandle, err := session.Ctx.GenerateKeyPair(session.Handle,
 		mech,
